@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AI Automatyzacja — mini-kalkulator potencjału</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="hero">
+    <nav class="topbar" aria-label="Główna nawigacja">
+      <div class="brand"><span class="brand-mark">AI</span> Automatyzacja</div>
+      <a class="ghost-link" href="#calculator">Otwórz kalkulator</a>
+    </nav>
+    <section class="hero-grid">
+      <div>
+        <p class="eyebrow">Departament: Obsługa klienta • Branża: e-commerce</p>
+        <h1>Kalkulator potencjału automatyzacji AI dla działu Customer Support</h1>
+        <p class="lead">Oceń, które zadania można automatyzować, gdzie AI powinno tylko wspierać zespół, a które procesy muszą pozostać pod kontrolą człowieka.</p>
+        <div class="hero-actions">
+          <a class="primary-link" href="#calculator">Rozpocznij ocenę</a>
+          <a class="secondary-link" href="#features">Zobacz funkcje dodatkowe</a>
+        </div>
+      </div>
+      <aside class="score-card" aria-label="Podsumowanie kalkulatora">
+        <span class="score-label">Wynik live</span>
+        <strong id="heroScore">0 h</strong>
+        <small>szacowane oszczędności miesięcznie</small>
+      </aside>
+    </section>
+  </header>
+
+  <main>
+    <section class="intro" id="features">
+      <div>
+        <h2>Co mierzy kalkulator?</h2>
+        <p>Narzędzie łączy ocenę potencjału AI, ryzyka, skali procesu i łatwości wdrożenia. Wyniki są przeliczane automatycznie i prezentowane jako heatmapa oraz rekomendacje dla managera.</p>
+      </div>
+      <div class="feature-list">
+        <span>Top 3 quick wins</span>
+        <span>Red flags AI</span>
+        <span>Szacowanie FTE</span>
+        <span>Plan pilotażu</span>
+        <span>Komunikat change management</span>
+        <span>Eksport CSV</span>
+      </div>
+    </section>
+
+    <section class="panel" id="calculator">
+      <div class="panel-header">
+        <div>
+          <p class="eyebrow">Krok 1</p>
+          <h2>Ustaw kontekst działu</h2>
+        </div>
+        <button id="resetBtn" class="text-button" type="button">Przywróć dane przykładowe</button>
+      </div>
+      <div class="context-grid">
+        <label>Departament
+          <input id="department" value="Obsługa klienta" />
+        </label>
+        <label>Branża
+          <input id="industry" value="E-commerce" />
+        </label>
+        <label>Liczba osób w dziale
+          <input id="teamSize" type="number" min="1" value="12" />
+        </label>
+        <label>Miesięczne godziny na 1 etat
+          <input id="fteHours" type="number" min="1" value="160" />
+        </label>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-header">
+        <div>
+          <p class="eyebrow">Kroki 2–6</p>
+          <h2>Oceń zadania i dobierz typ narzędzia AI</h2>
+        </div>
+        <button id="addTaskBtn" class="primary-button" type="button">+ Dodaj zadanie</button>
+      </div>
+      <div class="table-wrap">
+        <table aria-describedby="tableHelp">
+          <caption id="tableHelp">Tabela zadań: potencjał AI, ryzyko, skala, oszczędności, rekomendacja i narzędzie.</caption>
+          <thead>
+            <tr>
+              <th>Zadanie</th>
+              <th>Potencjał AI</th>
+              <th>Ryzyko</th>
+              <th>Osoby</th>
+              <th>Powt./mies.</th>
+              <th>Min/czynność</th>
+              <th>Wsparcie AI</th>
+              <th>Łatwość</th>
+              <th>Dane</th>
+              <th>Właściciel</th>
+              <th>Rekomendacja</th>
+              <th>Narzędzie AI</th>
+              <th>Oszczędność</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="taskRows"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="dashboard" aria-label="Wyniki kalkulatora">
+      <article class="metric">
+        <span>Oszczędność czasu</span>
+        <strong id="timeSaved">0 h/mies.</strong>
+        <small>powtórzenia × czas × wsparcie AI</small>
+      </article>
+      <article class="metric">
+        <span>Wstępny potencjał FTE</span>
+        <strong id="ftePotential">0,0 etatu</strong>
+        <small>z korektą ryzyka i adopcji</small>
+      </article>
+      <article class="metric">
+        <span>Średnia gotowość</span>
+        <strong id="readiness">0%</strong>
+        <small>potencjał, dane i łatwość wdrożenia</small>
+      </article>
+      <article class="metric">
+        <span>Najlepszy start</span>
+        <strong id="bestPilot">—</strong>
+        <small>quick win z najwyższym wynikiem</small>
+      </article>
+    </section>
+
+    <section class="answers panel">
+      <div class="panel-header">
+        <div>
+          <p class="eyebrow">Krok 7</p>
+          <h2>Aktywne rekomendacje kalkulatora</h2>
+        </div>
+        <button id="copySummaryBtn" class="secondary-button" type="button">Kopiuj podsumowanie</button>
+      </div>
+      <div class="answer-grid">
+        <article>
+          <h3>1. Top 3 zadania do automatyzacji</h3>
+          <ol id="quickWins"></ol>
+        </article>
+        <article>
+          <h3>2. Zadania, które powinny zostać przy człowieku</h3>
+          <ol id="protectedTasks"></ol>
+        </article>
+        <article>
+          <h3>3. Nowe kompetencje działu</h3>
+          <ul id="skillsList"></ul>
+        </article>
+        <article>
+          <h3>4. Potencjał redukcji etatów</h3>
+          <p id="fteNarrative"></p>
+        </article>
+      </div>
+    </section>
+
+    <section class="panel insights">
+      <h2>Dodatkowe insighty konkursowe</h2>
+      <div class="insight-grid">
+        <article>
+          <h3>AI red flags</h3>
+          <ul id="redFlags"></ul>
+        </article>
+        <article>
+          <h3>Rekomendacja dla managera</h3>
+          <p id="managerRecommendation"></p>
+        </article>
+        <article>
+          <h3>Mini-komunikat change management</h3>
+          <p id="changeMessage"></p>
+        </article>
+        <article>
+          <h3>Plan pierwszego pilota</h3>
+          <p id="pilotPlan"></p>
+        </article>
+      </div>
+      <div class="export-actions">
+        <button id="downloadCsvBtn" class="primary-button" type="button">Pobierz CSV</button>
+        <button id="printBtn" class="secondary-button" type="button">Drukuj / zapisz PDF</button>
+      </div>
+    </section>
+  </main>
+
+  <template id="taskRowTemplate">
+    <tr>
+      <td><input class="task-name" aria-label="Nazwa zadania" /></td>
+      <td><input class="ai-potential" type="range" min="1" max="5" /><output></output></td>
+      <td><input class="risk" type="range" min="1" max="5" /><output></output></td>
+      <td><input class="people" type="number" min="1" /></td>
+      <td><input class="repetitions" type="number" min="0" /></td>
+      <td><input class="minutes" type="number" min="1" /></td>
+      <td><input class="support" type="range" min="0" max="100" step="5" /><output></output></td>
+      <td><input class="ease" type="range" min="1" max="5" /><output></output></td>
+      <td>
+        <select class="data-availability">
+          <option value="high">wysoka</option>
+          <option value="medium">średnia</option>
+          <option value="low">niska</option>
+        </select>
+      </td>
+      <td><input class="owner" /></td>
+      <td><span class="badge recommendation"></span></td>
+      <td>
+        <select class="tool-type">
+          <option>Chatbot / voicebot</option>
+          <option>AI copilot dla konsultanta</option>
+          <option>RAG / wyszukiwarka wiedzy</option>
+          <option>Automatyzacja workflow + LLM</option>
+          <option>Analityka predykcyjna</option>
+          <option>OCR + analiza dokumentów</option>
+          <option>Generator treści</option>
+        </select>
+      </td>
+      <td><strong class="saved-hours"></strong><small class="comment"></small></td>
+      <td><button class="delete-row" type="button" aria-label="Usuń zadanie">×</button></td>
+    </tr>
+  </template>
+
+  <script src="app.js"></script>
+</body>
+</html>
