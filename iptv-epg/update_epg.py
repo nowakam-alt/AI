@@ -21,6 +21,53 @@ SERIES_HINTS = (
     "e01",
 )
 
+MOVIE_CATEGORY_HINTS = (
+    "film",
+    "movie",
+    "kino",
+    "dramat",
+    "komedia",
+    "komediodramat",
+    "thriller",
+    "horror",
+    "western",
+    "melodramat",
+    "musical",
+    "kryminał",
+    "kryminalny",
+    "sensacyjny",
+    "fantasy",
+    "science fiction",
+    "sci fi",
+    "familijny",
+    "przygodowy",
+    "animowany",
+    "biograficzny",
+    "kostiumowy",
+)
+
+MOVIE_CATEGORY_ALIASES = {
+    "dram",
+    "kom",
+    "thril",
+    "hor",
+    "sf",
+    "scifi",
+}
+
+NON_MOVIE_CATEGORY_HINTS = (
+    "serial",
+    "series",
+    "magazyn",
+    "program",
+    "sport",
+    "piłka nożna",
+    "pilka nozna",
+    "informacyjne",
+    "publicystyczny",
+    "reality show",
+)
+
 
 def load_config() -> dict[str, Any]:
     config_path = Path(os.environ.get("EPG_CONFIG_PATH", "epg_config.json"))
@@ -55,10 +102,27 @@ def build_search_titles(title: str) -> list[str]:
     add(title)
     add(cleaned)
 
-    for separator in (":", " - ", " | ", " / ", ","):
+    for separator in (":", " - ", " | ", " / ", ",", ". "):
         if separator in cleaned:
-            prefix = cleaned.split(separator, 1)[0].strip()
-            add(prefix)
+            left, right = cleaned.split(separator, 1)
+            add(left.strip())
+            add(right.strip())
+
+    # Documentary titles often contain a subtitle or a person's name.
+    words = re.findall(r"[A-ZĄĆĘŁŃÓŚŹŻ][\w'’-]*", title)
+    current_span: list[str] = []
+    for word in words:
+        if len(word) <= 1:
+            continue
+        current_span.append(word)
+        if len(current_span) >= 2:
+            add(" ".join(current_span[-3:]))
+
+    title_tokens = re.findall(r"[A-Za-zĄĆĘŁŃÓŚŹŻąćęłńóśźż0-9'’-]+", cleaned)
+    if len(title_tokens) >= 2:
+        add(" ".join(title_tokens[-2:]))
+    if len(title_tokens) >= 3:
+        add(" ".join(title_tokens[-3:]))
 
     return candidates
 
@@ -77,17 +141,12 @@ def looks_like_series(title: str, categories: list[str], programme: ET.Element) 
 
 def looks_like_movie(categories: list[str]) -> bool:
     normalized = [normalize_title(item) for item in categories if item]
-    return any(
-        (
-            item == "film"
-            or item == "movie"
-            or item == "kino"
-            or item.startswith("film ")
-            or item.startswith("movie ")
-        )
-        and "magazyn" not in item
-        for item in normalized
-    )
+    for item in normalized:
+        if any(hint in item for hint in NON_MOVIE_CATEGORY_HINTS):
+            continue
+        if item in MOVIE_CATEGORY_ALIASES or any(hint in item for hint in MOVIE_CATEGORY_HINTS):
+            return True
+    return False
 
 
 def fetch_xml(url: str) -> bytes:
@@ -149,17 +208,24 @@ def ensure_year(programme: ET.Element, year: str) -> None:
     date_node.text = year
 
 
-def append_year_to_titles(programme: ET.Element, year: str) -> bool:
-    changed = False
-    for title_node in programme.findall("title"):
-        if not title_node.text:
-            continue
-        title_text = title_node.text.strip()
-        if re.search(r"\(\d{4}\)\s*$", title_text):
-            continue
-        title_node.text = f"{title_text} ({year})"
-        changed = True
-    return changed
+def prepend_year_to_descriptions(programme: ET.Element, year: str) -> bool:
+    desc_nodes = programme.findall("desc")
+    prefix = f"Rok produkcji: {year}"
+
+    if not desc_nodes:
+        desc_node = ET.SubElement(programme, "desc")
+        desc_node.text = prefix
+        return True
+
+    for desc_node in desc_nodes:
+        current_text = (desc_node.text or "").strip()
+        current_text = re.sub(
+            r"^Rok produkcji:\s*\d{4}\.?\s*",
+            "",
+            current_text,
+        ).strip()
+        desc_node.text = f"{prefix}. {current_text}" if current_text else prefix
+    return True
 
 
 def main() -> int:
@@ -177,7 +243,7 @@ def main() -> int:
     cache = load_cache(cache_path)
     updated = 0
     skipped = 0
-    title_updates = 0
+    desc_updates = 0
 
     for programme in root.findall("programme"):
         categories = [node.text.strip() for node in programme.findall("category") if node.text]
@@ -211,8 +277,8 @@ def main() -> int:
 
         if year:
             ensure_year(programme, year)
-            if append_year_to_titles(programme, year):
-                title_updates += 1
+            if prepend_year_to_descriptions(programme, year):
+                desc_updates += 1
             updated += 1
         else:
             skipped += 1
@@ -222,7 +288,7 @@ def main() -> int:
     save_cache(cache_path, cache)
 
     print(f"Updated programmes: {updated}")
-    print(f"Updated titles: {title_updates}")
+    print(f"Updated descriptions: {desc_updates}")
     print(f"Skipped programmes: {skipped}")
     print(f"Output: {output_path}")
     return 0
