@@ -190,11 +190,23 @@ def fetch_json(url: str) -> dict[str, Any]:
     return {}
 
 
+def normalized_rating(value: Any) -> float | None:
+    try:
+        rating = float(value)
+    except (TypeError, ValueError):
+        return None
+    if rating <= 0:
+        return None
+    return round(rating, 1)
+
+
 def tmdb_movie_details(
     api_key: str,
     movie_id: int,
     language: str,
     fallback_release_date: str,
+    fallback_rating: float | None,
+    fallback_vote_count: int,
 ) -> dict[str, Any]:
     params = urllib.parse.urlencode({
         "api_key": api_key,
@@ -217,6 +229,8 @@ def tmdb_movie_details(
             for item in payload.get("credits", {}).get("cast", [])[:CAST_LIMIT]
             if item.get("name")
         ],
+        "rating": normalized_rating(payload.get("vote_average")) or fallback_rating,
+        "vote_count": int(payload.get("vote_count") or fallback_vote_count or 0),
         "tmdb_id": movie_id,
         "tmdb_checked": True,
     }
@@ -226,6 +240,8 @@ def tmdb_search_once(
     api_key: str,
     title: str,
     language: str,
+    expected_year: str,
+    include_details: bool,
 ) -> dict[str, Any] | None:
     params = urllib.parse.urlencode({
         "api_key": api_key,
@@ -248,16 +264,38 @@ def tmdb_search_once(
             selected = item
             break
 
+    if selected is None and expected_year:
+        for item in results:
+            if (item.get("release_date") or "").startswith(expected_year):
+                selected = item
+                break
+
     if selected is None and results:
         selected = results[0]
     if selected is None or not selected.get("id"):
         return None
+
+    rating = normalized_rating(selected.get("vote_average"))
+    vote_count = int(selected.get("vote_count") or 0)
+    if not include_details:
+        release_date = selected.get("release_date") or ""
+        return {
+            "year": release_date[:4] if release_date else "",
+            "genres": [],
+            "cast": [],
+            "rating": rating,
+            "vote_count": vote_count,
+            "tmdb_id": selected["id"],
+            "tmdb_checked": True,
+        }
 
     return tmdb_movie_details(
         api_key,
         selected["id"],
         language,
         selected.get("release_date") or "",
+        rating,
+        vote_count,
     )
 
 
@@ -265,6 +303,8 @@ def tmdb_search(
     api_key: str,
     title: str,
     language: str,
+    expected_year: str = "",
+    include_details: bool = True,
 ) -> dict[str, Any] | None:
     search_titles = build_search_titles(title)
     languages = [language]
@@ -273,7 +313,13 @@ def tmdb_search(
 
     for candidate_title in search_titles:
         for candidate_language in languages:
-            metadata = tmdb_search_once(api_key, candidate_title, candidate_language)
+            metadata = tmdb_search_once(
+                api_key,
+                candidate_title,
+                candidate_language,
+                expected_year,
+                include_details,
+            )
             if metadata:
                 return metadata
     return None
@@ -343,6 +389,8 @@ def cached_metadata(value: Any) -> dict[str, Any]:
             "year": value,
             "genres": [],
             "cast": [],
+            "rating": None,
+            "vote_count": 0,
             "tmdb_checked": False,
         }
     if not isinstance(value, dict):
@@ -350,12 +398,16 @@ def cached_metadata(value: Any) -> dict[str, Any]:
             "year": "",
             "genres": [],
             "cast": [],
+            "rating": None,
+            "vote_count": 0,
             "tmdb_checked": False,
         }
     return {
         "year": str(value.get("year") or ""),
         "genres": unique_values(value.get("genres") or []),
         "cast": unique_values(value.get("cast") or [], CAST_LIMIT),
+        "rating": normalized_rating(value.get("rating")),
+        "vote_count": int(value.get("vote_count") or 0),
         "tmdb_id": value.get("tmdb_id"),
         "tmdb_checked": bool(value.get("tmdb_checked")),
     }
@@ -373,6 +425,14 @@ def merge_metadata(
         "cast": unique_values(
             list(primary.get("cast") or []) + list(secondary.get("cast") or []),
             CAST_LIMIT,
+        ),
+        "rating": (
+            primary.get("rating")
+            if primary.get("rating") is not None
+            else secondary.get("rating")
+        ),
+        "vote_count": int(
+            primary.get("vote_count") or secondary.get("vote_count") or 0
         ),
         "tmdb_id": primary.get("tmdb_id") or secondary.get("tmdb_id"),
         "tmdb_checked": bool(
@@ -397,6 +457,8 @@ def prepend_metadata_to_descriptions(
 
     if metadata.get("year"):
         fields.append(f"Rok produkcji: {metadata['year']}")
+    if metadata.get("rating") is not None:
+        fields.append(f"Ocena TMDb: {metadata['rating']:.1f}/10")
     if metadata.get("genres"):
         fields.append(f"Gatunek: {', '.join(metadata['genres'])}")
     if metadata.get("cast"):
@@ -414,7 +476,7 @@ def prepend_metadata_to_descriptions(
     for desc_node in desc_nodes:
         current_text = (desc_node.text or "").strip()
         current_text = re.sub(
-            r"^\[(?=[^\]]*(?:Rok produkcji|Gatunek|Obsada):)[^\]]*\]\s*",
+            r"^\[(?=[^\]]*(?:Rok produkcji|Ocena TMDb|Gatunek|Obsada):)[^\]]*\]\s*",
             "",
             current_text,
         ).strip()
@@ -466,6 +528,8 @@ def main() -> int:
             "year": existing_year[:4] if existing_year else "",
             "genres": source_genres(categories),
             "cast": source_cast(programme),
+            "rating": None,
+            "vote_count": 0,
             "tmdb_checked": False,
         }
         previous_metadata = metadata_by_key.get(
@@ -483,6 +547,7 @@ def main() -> int:
             not metadata["tmdb_checked"]
             and (
                 not metadata["year"]
+                or metadata.get("rating") is None
                 or not metadata["genres"]
                 or len(metadata["cast"]) < CAST_LIMIT
             )
@@ -492,7 +557,17 @@ def main() -> int:
 
     def lookup(key: str) -> tuple[str, dict[str, Any] | None, Exception | None]:
         try:
-            result = tmdb_search(tmdb_api_key, titles_by_key[key], tmdb_language)
+            metadata = metadata_by_key[key]
+            include_details = (
+                not metadata["genres"] or len(metadata["cast"]) < CAST_LIMIT
+            )
+            result = tmdb_search(
+                tmdb_api_key,
+                titles_by_key[key],
+                tmdb_language,
+                expected_year=metadata["year"],
+                include_details=include_details,
+            )
             return key, result, None
         except Exception as exc:
             return key, None, exc
