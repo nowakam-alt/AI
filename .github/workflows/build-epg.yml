@@ -6,7 +6,7 @@ on:
     - cron: "17 2 * * *"
 
 permissions:
-  contents: write
+  contents: read
   pages: write
   id-token: write
 
@@ -24,6 +24,14 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
+      - name: Restore EPG cache
+        uses: actions/cache/restore@v4
+        with:
+          path: iptv-epg/.cache
+          key: epg-cache-${{ github.run_id }}
+          restore-keys: |
+            epg-cache-
 
       - name: Install dependencies
         working-directory: iptv-epg
@@ -43,11 +51,12 @@ jobs:
         with:
           path: iptv-epg/docs
 
-      - name: Commit cache
-        uses: stefanzweifel/git-auto-commit-action@v5
+      - name: Save EPG cache
+        if: always()
+        uses: actions/cache/save@v4
         with:
-          commit_message: "Update EPG cache"
-          file_pattern: iptv-epg/.cache/epg_years.json iptv-epg/docs/epg.xml
+          path: iptv-epg/.cache
+          key: epg-cache-${{ github.run_id }}
 
       - name: Deploy to GitHub Pages
         id: deployment
