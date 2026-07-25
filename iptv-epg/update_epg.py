@@ -149,6 +149,19 @@ def ensure_year(programme: ET.Element, year: str) -> None:
     date_node.text = year
 
 
+def append_year_to_titles(programme: ET.Element, year: str) -> bool:
+    changed = False
+    for title_node in programme.findall("title"):
+        if not title_node.text:
+            continue
+        title_text = title_node.text.strip()
+        if re.search(r"\(\d{4}\)\s*$", title_text):
+            continue
+        title_node.text = f"{title_text} ({year})"
+        changed = True
+    return changed
+
+
 def main() -> int:
     config = load_config()
     source_url = config["source_epg_url"]
@@ -164,12 +177,9 @@ def main() -> int:
     cache = load_cache(cache_path)
     updated = 0
     skipped = 0
+    title_updates = 0
 
     for programme in root.findall("programme"):
-        if programme.find("date") is not None and (programme.findtext("date") or "").strip():
-            skipped += 1
-            continue
-
         categories = [node.text.strip() for node in programme.findall("category") if node.text]
         title = (programme.findtext("title") or "").strip()
         if not title:
@@ -183,7 +193,11 @@ def main() -> int:
             continue
 
         key = normalize_title(title)
-        if key in cache:
+        existing_year = (programme.findtext("date") or "").strip()
+
+        if existing_year:
+            year = existing_year[:4]
+        elif key in cache:
             year = cache[key] or None
         else:
             try:
@@ -197,6 +211,8 @@ def main() -> int:
 
         if year:
             ensure_year(programme, year)
+            if append_year_to_titles(programme, year):
+                title_updates += 1
             updated += 1
         else:
             skipped += 1
@@ -206,6 +222,7 @@ def main() -> int:
     save_cache(cache_path, cache)
 
     print(f"Updated programmes: {updated}")
+    print(f"Updated titles: {title_updates}")
     print(f"Skipped programmes: {skipped}")
     print(f"Output: {output_path}")
     return 0
