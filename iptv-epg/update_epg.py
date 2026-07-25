@@ -3,9 +3,11 @@ import os
 import re
 import sys
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
@@ -67,6 +69,9 @@ NON_MOVIE_CATEGORY_HINTS = (
     "publicystyczny",
     "reality show",
 )
+
+CAST_LIMIT = 5
+TMDB_WORKERS = 4
 
 
 def load_config() -> dict[str, Any]:
@@ -165,7 +170,63 @@ def save_cache(path: Path, cache: dict[str, Any]) -> None:
     path.write_text(json.dumps(cache, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def tmdb_search_once(api_key: str, title: str, language: str) -> str | None:
+def fetch_json(url: str) -> dict[str, Any]:
+    request = urllib.request.Request(
+        url,
+        headers={"User-Agent": "Personal-IPTV-EPG-Enricher/1.0"},
+    )
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(request, timeout=60) as response:
+                return json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            if exc.code != 429 and exc.code < 500:
+                raise
+            if attempt == 2:
+                raise
+            retry_after = exc.headers.get("Retry-After")
+            delay = float(retry_after) if retry_after else float(attempt + 1)
+            time.sleep(max(delay, 1.0))
+    return {}
+
+
+def tmdb_movie_details(
+    api_key: str,
+    movie_id: int,
+    language: str,
+    fallback_release_date: str,
+) -> dict[str, Any]:
+    params = urllib.parse.urlencode({
+        "api_key": api_key,
+        "language": language,
+        "append_to_response": "credits",
+    })
+    url = f"https://api.themoviedb.org/3/movie/{movie_id}?{params}"
+    payload = fetch_json(url)
+
+    release_date = payload.get("release_date") or fallback_release_date
+    return {
+        "year": release_date[:4] if release_date else "",
+        "genres": [
+            item["name"].strip()
+            for item in payload.get("genres", [])
+            if item.get("name")
+        ],
+        "cast": [
+            item["name"].strip()
+            for item in payload.get("credits", {}).get("cast", [])[:CAST_LIMIT]
+            if item.get("name")
+        ],
+        "tmdb_id": movie_id,
+        "tmdb_checked": True,
+    }
+
+
+def tmdb_search_once(
+    api_key: str,
+    title: str,
+    language: str,
+) -> dict[str, Any] | None:
     params = urllib.parse.urlencode({
         "api_key": api_key,
         "query": title,
@@ -173,21 +234,38 @@ def tmdb_search_once(api_key: str, title: str, language: str) -> str | None:
         "include_adult": "false",
     })
     url = f"https://api.themoviedb.org/3/search/movie?{params}"
-    with urllib.request.urlopen(url, timeout=60) as response:
-        payload = json.loads(response.read().decode("utf-8"))
+    payload = fetch_json(url)
     results = payload.get("results", [])
     normalized_title = normalize_title(title)
+    selected = None
+
     for item in results:
-        candidate = normalize_title(item.get("title") or item.get("original_title") or "")
-        if candidate == normalized_title and item.get("release_date"):
-            return item["release_date"][:4]
-    for item in results:
-        if item.get("release_date"):
-            return item["release_date"][:4]
-    return None
+        candidate_titles = {
+            normalize_title(item.get("title") or ""),
+            normalize_title(item.get("original_title") or ""),
+        }
+        if normalized_title in candidate_titles:
+            selected = item
+            break
+
+    if selected is None and results:
+        selected = results[0]
+    if selected is None or not selected.get("id"):
+        return None
+
+    return tmdb_movie_details(
+        api_key,
+        selected["id"],
+        language,
+        selected.get("release_date") or "",
+    )
 
 
-def tmdb_search(api_key: str, title: str, language: str) -> str | None:
+def tmdb_search(
+    api_key: str,
+    title: str,
+    language: str,
+) -> dict[str, Any] | None:
     search_titles = build_search_titles(title)
     languages = [language]
     if language != "en-US":
@@ -195,10 +273,112 @@ def tmdb_search(api_key: str, title: str, language: str) -> str | None:
 
     for candidate_title in search_titles:
         for candidate_language in languages:
-            year = tmdb_search_once(api_key, candidate_title, candidate_language)
-            if year:
-                return year
+            metadata = tmdb_search_once(api_key, candidate_title, candidate_language)
+            if metadata:
+                return metadata
     return None
+
+
+def unique_values(values: list[str], limit: int | None = None) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        value = value.strip()
+        normalized = normalize_title(value)
+        if not value or not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        result.append(value)
+        if limit is not None and len(result) >= limit:
+            break
+    return result
+
+
+def source_genres(categories: list[str]) -> list[str]:
+    genres: list[str] = []
+    alias_names = {
+        "dram": "dramat",
+        "kom": "komedia",
+        "thril": "thriller",
+        "hor": "horror",
+        "sf": "SF",
+        "scifi": "science fiction",
+    }
+
+    for category in categories:
+        normalized = normalize_title(category)
+        if any(hint in normalized for hint in NON_MOVIE_CATEGORY_HINTS):
+            continue
+        if normalized in alias_names:
+            genres.append(alias_names[normalized])
+            continue
+
+        genre = re.sub(r"^(?:film|movie|kino)\s*", "", category, flags=re.IGNORECASE).strip()
+        if genre and normalize_title(genre) not in {"film", "movie", "kino"}:
+            genres.append(genre)
+
+    return unique_values(genres)
+
+
+def source_cast(programme: ET.Element) -> list[str]:
+    credits = programme.find("credits")
+    if credits is None:
+        return []
+
+    actors: list[str] = []
+    for actor in credits.findall("actor"):
+        value = (actor.text or "").strip()
+        if not value:
+            continue
+        # epg.ovh commonly uses "role - actor"; XMLTV may also contain the name alone.
+        if " - " in value:
+            value = value.rsplit(" - ", 1)[1].strip()
+        actors.append(value)
+    return unique_values(actors, CAST_LIMIT)
+
+
+def cached_metadata(value: Any) -> dict[str, Any]:
+    if isinstance(value, str):
+        return {
+            "year": value,
+            "genres": [],
+            "cast": [],
+            "tmdb_checked": False,
+        }
+    if not isinstance(value, dict):
+        return {
+            "year": "",
+            "genres": [],
+            "cast": [],
+            "tmdb_checked": False,
+        }
+    return {
+        "year": str(value.get("year") or ""),
+        "genres": unique_values(value.get("genres") or []),
+        "cast": unique_values(value.get("cast") or [], CAST_LIMIT),
+        "tmdb_id": value.get("tmdb_id"),
+        "tmdb_checked": bool(value.get("tmdb_checked")),
+    }
+
+
+def merge_metadata(
+    primary: dict[str, Any],
+    secondary: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "year": primary.get("year") or secondary.get("year") or "",
+        "genres": unique_values(
+            list(primary.get("genres") or secondary.get("genres") or [])
+        ),
+        "cast": unique_values(
+            list(primary.get("cast") or []) + list(secondary.get("cast") or []),
+            CAST_LIMIT,
+        ),
+        "tmdb_id": primary.get("tmdb_id") or secondary.get("tmdb_id"),
+        "tmdb_checked": bool(
+            primary.get("tmdb_checked") or secondary.get("tmdb_checked")
+        ),
+    }
 
 
 def ensure_year(programme: ET.Element, year: str) -> None:
@@ -208,9 +388,23 @@ def ensure_year(programme: ET.Element, year: str) -> None:
     date_node.text = year
 
 
-def prepend_year_to_descriptions(programme: ET.Element, year: str) -> bool:
+def prepend_metadata_to_descriptions(
+    programme: ET.Element,
+    metadata: dict[str, Any],
+) -> bool:
     desc_nodes = programme.findall("desc")
-    prefix = f"Rok produkcji: {year}"
+    fields: list[str] = []
+
+    if metadata.get("year"):
+        fields.append(f"Rok produkcji: {metadata['year']}")
+    if metadata.get("genres"):
+        fields.append(f"Gatunek: {', '.join(metadata['genres'])}")
+    if metadata.get("cast"):
+        fields.append(f"Obsada: {', '.join(metadata['cast'])}")
+    if not fields:
+        return False
+
+    prefix = f"[{' | '.join(fields)}]"
 
     if not desc_nodes:
         desc_node = ET.SubElement(programme, "desc")
@@ -220,11 +414,16 @@ def prepend_year_to_descriptions(programme: ET.Element, year: str) -> bool:
     for desc_node in desc_nodes:
         current_text = (desc_node.text or "").strip()
         current_text = re.sub(
+            r"^\[(?=[^\]]*(?:Rok produkcji|Gatunek|Obsada):)[^\]]*\]\s*",
+            "",
+            current_text,
+        ).strip()
+        current_text = re.sub(
             r"^Rok produkcji:\s*\d{4}\.?\s*",
             "",
             current_text,
         ).strip()
-        desc_node.text = f"{prefix}. {current_text}" if current_text else prefix
+        desc_node.text = f"{prefix} {current_text}" if current_text else prefix
     return True
 
 
@@ -232,7 +431,7 @@ def main() -> int:
     config = load_config()
     source_url = config["source_epg_url"]
     output_path = Path(config.get("output_path", "docs/epg.xml"))
-    cache_path = Path(config.get("cache_path", ".cache/epg_years.json"))
+    cache_path = Path(config.get("cache_path", ".cache/epg_metadata.json"))
     tmdb_language = config.get("tmdb_language", "pl-PL")
     tmdb_api_key = os.environ.get("TMDB_API_KEY")
     if not tmdb_api_key:
@@ -244,6 +443,9 @@ def main() -> int:
     updated = 0
     skipped = 0
     desc_updates = 0
+    programmes_by_key: dict[str, list[ET.Element]] = {}
+    titles_by_key: dict[str, str] = {}
+    metadata_by_key: dict[str, dict[str, Any]] = {}
 
     for programme in root.findall("programme"):
         categories = [node.text.strip() for node in programme.findall("category") if node.text]
@@ -260,28 +462,70 @@ def main() -> int:
 
         key = normalize_title(title)
         existing_year = (programme.findtext("date") or "").strip()
+        source_metadata = {
+            "year": existing_year[:4] if existing_year else "",
+            "genres": source_genres(categories),
+            "cast": source_cast(programme),
+            "tmdb_checked": False,
+        }
+        previous_metadata = metadata_by_key.get(
+            key,
+            cached_metadata(cache.get(key)),
+        )
+        metadata_by_key[key] = merge_metadata(source_metadata, previous_metadata)
+        programmes_by_key.setdefault(key, []).append(programme)
+        titles_by_key.setdefault(key, title)
 
-        if existing_year:
-            year = existing_year[:4]
-        elif key in cache:
-            year = cache[key] or None
-        else:
-            try:
-                year = tmdb_search(tmdb_api_key, title, tmdb_language)
-            except Exception as exc:
-                print(f"TMDb lookup failed for {title!r}: {exc}", file=sys.stderr)
-                time.sleep(1)
+    lookup_keys = [
+        key
+        for key, metadata in metadata_by_key.items()
+        if (
+            not metadata["tmdb_checked"]
+            and (
+                not metadata["year"]
+                or not metadata["genres"]
+                or len(metadata["cast"]) < CAST_LIMIT
+            )
+        )
+    ]
+    print(f"Unique TMDb lookups: {len(lookup_keys)}")
+
+    def lookup(key: str) -> tuple[str, dict[str, Any] | None, Exception | None]:
+        try:
+            result = tmdb_search(tmdb_api_key, titles_by_key[key], tmdb_language)
+            return key, result, None
+        except Exception as exc:
+            return key, None, exc
+
+    with ThreadPoolExecutor(max_workers=TMDB_WORKERS) as executor:
+        futures = [executor.submit(lookup, key) for key in lookup_keys]
+        for future in as_completed(futures):
+            key, tmdb_metadata, error = future.result()
+            if error is not None:
+                print(
+                    f"TMDb lookup failed for {titles_by_key[key]!r}: {error}",
+                    file=sys.stderr,
+                )
                 continue
-            cache[key] = year or ""
-            time.sleep(0.25)
+            if tmdb_metadata:
+                metadata_by_key[key] = merge_metadata(
+                    metadata_by_key[key],
+                    tmdb_metadata,
+                )
+            metadata_by_key[key]["tmdb_checked"] = True
 
-        if year:
-            ensure_year(programme, year)
-            if prepend_year_to_descriptions(programme, year):
+    for key, programmes in programmes_by_key.items():
+        metadata = metadata_by_key[key]
+        cache[key] = metadata
+
+        for programme in programmes:
+            if metadata["year"]:
+                ensure_year(programme, metadata["year"])
+            if prepend_metadata_to_descriptions(programme, metadata):
                 desc_updates += 1
-            updated += 1
-        else:
-            skipped += 1
+                updated += 1
+            else:
+                skipped += 1
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     ET.ElementTree(root).write(output_path, encoding="utf-8", xml_declaration=True)

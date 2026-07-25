@@ -1,6 +1,6 @@
 {
   "source_epg_url": "https://epg.ovh/plar.xml",
   "output_path": "docs/epg.xml",
-  "cache_path": ".cache/epg_years.json",
+  "cache_path": ".cache/epg_metadata.json",
   "tmdb_language": "pl-PL"
 }

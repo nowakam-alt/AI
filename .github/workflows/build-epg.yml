@@ -35,9 +35,9 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: iptv-epg/.cache
-          key: epg-cache-v3-${{ github.run_id }}
+          key: epg-cache-v4-${{ github.run_id }}
           restore-keys: |
-            epg-cache-v3-
+            epg-cache-v4-
 
       - name: Install dependencies
         working-directory: iptv-epg
@@ -62,7 +62,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: iptv-epg/.cache
-          key: epg-cache-v3-${{ github.run_id }}
+          key: epg-cache-v4-${{ github.run_id }}
 
       - name: Deploy to GitHub Pages
         id: deployment
