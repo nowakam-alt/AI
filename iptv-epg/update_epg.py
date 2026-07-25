@@ -38,6 +38,31 @@ def normalize_title(title: str) -> str:
     return title.strip()
 
 
+def build_search_titles(title: str) -> list[str]:
+    candidates: list[str] = []
+
+    def add(value: str) -> None:
+        value = value.strip()
+        if len(value) < 2:
+            return
+        if value not in candidates:
+            candidates.append(value)
+
+    cleaned = re.sub(r"\([^)]*\)", "", title)
+    cleaned = re.sub(r"\[[^\]]*\]", "", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+
+    add(title)
+    add(cleaned)
+
+    for separator in (":", " - ", " | ", " / ", ","):
+        if separator in cleaned:
+            prefix = cleaned.split(separator, 1)[0].strip()
+            add(prefix)
+
+    return candidates
+
+
 def looks_like_series(title: str, categories: list[str], programme: ET.Element) -> bool:
     category_text = " ".join(categories).lower()
     title_text = title.lower()
@@ -81,7 +106,7 @@ def save_cache(path: Path, cache: dict[str, Any]) -> None:
     path.write_text(json.dumps(cache, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def tmdb_search(api_key: str, title: str, language: str) -> str | None:
+def tmdb_search_once(api_key: str, title: str, language: str) -> str | None:
     params = urllib.parse.urlencode({
         "api_key": api_key,
         "query": title,
@@ -100,6 +125,20 @@ def tmdb_search(api_key: str, title: str, language: str) -> str | None:
     for item in results:
         if item.get("release_date"):
             return item["release_date"][:4]
+    return None
+
+
+def tmdb_search(api_key: str, title: str, language: str) -> str | None:
+    search_titles = build_search_titles(title)
+    languages = [language]
+    if language != "en-US":
+        languages.append("en-US")
+
+    for candidate_title in search_titles:
+        for candidate_language in languages:
+            year = tmdb_search_once(api_key, candidate_title, candidate_language)
+            if year:
+                return year
     return None
 
 
@@ -144,15 +183,16 @@ def main() -> int:
             continue
 
         key = normalize_title(title)
-        year = cache.get(key)
-        if year is None:
+        if key in cache:
+            year = cache[key] or None
+        else:
             try:
                 year = tmdb_search(tmdb_api_key, title, tmdb_language)
             except Exception as exc:
                 print(f"TMDb lookup failed for {title!r}: {exc}", file=sys.stderr)
                 time.sleep(1)
                 continue
-            cache[key] = year
+            cache[key] = year or ""
             time.sleep(0.25)
 
         if year:
