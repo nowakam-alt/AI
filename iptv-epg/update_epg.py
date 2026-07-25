@@ -10,29 +10,6 @@ from pathlib import Path
 from typing import Any
 
 
-MOVIE_CATEGORIES = {
-    "film",
-    "movie",
-    "film fabularny",
-    "kino",
-    "dramat",
-    "komedia",
-    "thriller",
-    "horror",
-    "sensacyjny",
-    "akcja",
-    "romans",
-    "science fiction",
-    "sci-fi",
-    "fantasy",
-    "animacja",
-    "familijny",
-    "przygodowy",
-    "western",
-    "kryminalny",
-    "dokumentalny",
-}
-
 SERIES_HINTS = (
     "serial",
     "series",
@@ -74,8 +51,18 @@ def looks_like_series(title: str, categories: list[str], programme: ET.Element) 
 
 
 def looks_like_movie(categories: list[str]) -> bool:
-    normalized = {normalize_title(item) for item in categories if item}
-    return any(item in MOVIE_CATEGORIES for item in normalized)
+    normalized = [normalize_title(item) for item in categories if item]
+    return any(
+        (
+            item == "film"
+            or item == "movie"
+            or item == "kino"
+            or item.startswith("film ")
+            or item.startswith("movie ")
+        )
+        and "magazyn" not in item
+        for item in normalized
+    )
 
 
 def fetch_xml(url: str) -> bytes:
@@ -152,11 +139,7 @@ def main() -> int:
         if looks_like_series(title, categories, programme):
             skipped += 1
             continue
-        normalized_categories = [normalize_title(item) for item in categories if item]
-        is_explicit_movie = looks_like_movie(categories) or any(
-            item.startswith("film") and "magazyn" not in item for item in normalized_categories
-        )
-        if categories and not is_explicit_movie:
+        if not looks_like_movie(categories):
             skipped += 1
             continue
 
