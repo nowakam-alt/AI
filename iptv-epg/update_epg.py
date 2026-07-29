@@ -68,10 +68,13 @@ NON_MOVIE_CATEGORY_HINTS = (
     "informacyjne",
     "publicystyczny",
     "reality show",
+    "teleturniej",
+    "talk show",
+    "talk-show",
 )
 
 CAST_LIMIT = 5
-TMDB_WORKERS = 4
+TMDB_WORKERS = 8
 
 
 def load_config() -> dict[str, Any]:
@@ -135,9 +138,14 @@ def build_search_titles(title: str) -> list[str]:
 def looks_like_series(title: str, categories: list[str], programme: ET.Element) -> bool:
     category_text = " ".join(categories).lower()
     title_text = title.lower()
-    if any(hint in title_text for hint in SERIES_HINTS):
-        return True
     if "serial" in category_text or "series" in category_text:
+        return True
+    non_series_hints = tuple(
+        hint for hint in NON_MOVIE_CATEGORY_HINTS if hint not in {"serial", "series"}
+    )
+    if any(hint in category_text for hint in non_series_hints):
+        return False
+    if any(hint in title_text for hint in SERIES_HINTS):
         return True
     if programme.find("episode-num") is not None:
         return True
@@ -200,11 +208,12 @@ def normalized_rating(value: Any) -> float | None:
     return round(rating, 1)
 
 
-def tmdb_movie_details(
+def tmdb_media_details(
     api_key: str,
-    movie_id: int,
+    media_type: str,
+    media_id: int,
     language: str,
-    fallback_release_date: str,
+    fallback_date: str,
     fallback_rating: float | None,
     fallback_vote_count: int,
 ) -> dict[str, Any]:
@@ -213,10 +222,11 @@ def tmdb_movie_details(
         "language": language,
         "append_to_response": "credits",
     })
-    url = f"https://api.themoviedb.org/3/movie/{movie_id}?{params}"
+    url = f"https://api.themoviedb.org/3/{media_type}/{media_id}?{params}"
     payload = fetch_json(url)
 
-    release_date = payload.get("release_date") or fallback_release_date
+    date_field = "release_date" if media_type == "movie" else "first_air_date"
+    release_date = payload.get(date_field) or fallback_date
     return {
         "year": release_date[:4] if release_date else "",
         "genres": [
@@ -231,7 +241,8 @@ def tmdb_movie_details(
         ],
         "rating": normalized_rating(payload.get("vote_average")) or fallback_rating,
         "vote_count": int(payload.get("vote_count") or fallback_vote_count or 0),
-        "tmdb_id": movie_id,
+        "media_type": media_type,
+        "tmdb_id": media_id,
         "tmdb_checked": True,
     }
 
@@ -240,6 +251,7 @@ def tmdb_search_once(
     api_key: str,
     title: str,
     language: str,
+    media_type: str,
     expected_year: str,
     include_details: bool,
 ) -> dict[str, Any] | None:
@@ -249,16 +261,19 @@ def tmdb_search_once(
         "language": language,
         "include_adult": "false",
     })
-    url = f"https://api.themoviedb.org/3/search/movie?{params}"
+    url = f"https://api.themoviedb.org/3/search/{media_type}?{params}"
     payload = fetch_json(url)
     results = payload.get("results", [])
     normalized_title = normalize_title(title)
     selected = None
+    title_field = "title" if media_type == "movie" else "name"
+    original_title_field = "original_title" if media_type == "movie" else "original_name"
+    date_field = "release_date" if media_type == "movie" else "first_air_date"
 
     for item in results:
         candidate_titles = {
-            normalize_title(item.get("title") or ""),
-            normalize_title(item.get("original_title") or ""),
+            normalize_title(item.get(title_field) or ""),
+            normalize_title(item.get(original_title_field) or ""),
         }
         if normalized_title in candidate_titles:
             selected = item
@@ -266,7 +281,7 @@ def tmdb_search_once(
 
     if selected is None and expected_year:
         for item in results:
-            if (item.get("release_date") or "").startswith(expected_year):
+            if (item.get(date_field) or "").startswith(expected_year):
                 selected = item
                 break
 
@@ -278,22 +293,24 @@ def tmdb_search_once(
     rating = normalized_rating(selected.get("vote_average"))
     vote_count = int(selected.get("vote_count") or 0)
     if not include_details:
-        release_date = selected.get("release_date") or ""
+        release_date = selected.get(date_field) or ""
         return {
             "year": release_date[:4] if release_date else "",
             "genres": [],
             "cast": [],
             "rating": rating,
             "vote_count": vote_count,
+            "media_type": media_type,
             "tmdb_id": selected["id"],
             "tmdb_checked": True,
         }
 
-    return tmdb_movie_details(
+    return tmdb_media_details(
         api_key,
+        media_type,
         selected["id"],
         language,
-        selected.get("release_date") or "",
+        selected.get(date_field) or "",
         rating,
         vote_count,
     )
@@ -303,6 +320,7 @@ def tmdb_search(
     api_key: str,
     title: str,
     language: str,
+    media_type: str = "movie",
     expected_year: str = "",
     include_details: bool = True,
 ) -> dict[str, Any] | None:
@@ -317,6 +335,7 @@ def tmdb_search(
                 api_key,
                 candidate_title,
                 candidate_language,
+                media_type,
                 expected_year,
                 include_details,
             )
@@ -340,7 +359,7 @@ def unique_values(values: list[str], limit: int | None = None) -> list[str]:
     return result
 
 
-def source_genres(categories: list[str]) -> list[str]:
+def source_genres(categories: list[str], media_type: str) -> list[str]:
     genres: list[str] = []
     alias_names = {
         "dram": "dramat",
@@ -353,14 +372,21 @@ def source_genres(categories: list[str]) -> list[str]:
 
     for category in categories:
         normalized = normalize_title(category)
-        if any(hint in normalized for hint in NON_MOVIE_CATEGORY_HINTS):
+        excluded_hints = NON_MOVIE_CATEGORY_HINTS
+        if media_type == "tv":
+            excluded_hints = tuple(
+                hint for hint in NON_MOVIE_CATEGORY_HINTS if hint not in {"serial", "series"}
+            )
+        if any(hint in normalized for hint in excluded_hints):
             continue
         if normalized in alias_names:
             genres.append(alias_names[normalized])
             continue
 
-        genre = re.sub(r"^(?:film|movie|kino)\s*", "", category, flags=re.IGNORECASE).strip()
-        if genre and normalize_title(genre) not in {"film", "movie", "kino"}:
+        prefixes = r"(?:film|movie|kino)" if media_type == "movie" else r"(?:serial|series)"
+        genre = re.sub(rf"^{prefixes}\s*", "", category, flags=re.IGNORECASE).strip()
+        generic_names = {"film", "movie", "kino"} if media_type == "movie" else {"serial", "series"}
+        if genre and normalize_title(genre) not in generic_names:
             genres.append(genre)
 
     return unique_values(genres)
@@ -383,7 +409,7 @@ def source_cast(programme: ET.Element) -> list[str]:
     return unique_values(actors, CAST_LIMIT)
 
 
-def cached_metadata(value: Any) -> dict[str, Any]:
+def cached_metadata(value: Any, media_type: str) -> dict[str, Any]:
     if isinstance(value, str):
         return {
             "year": value,
@@ -391,6 +417,7 @@ def cached_metadata(value: Any) -> dict[str, Any]:
             "cast": [],
             "rating": None,
             "vote_count": 0,
+            "media_type": media_type,
             "tmdb_checked": False,
         }
     if not isinstance(value, dict):
@@ -400,6 +427,7 @@ def cached_metadata(value: Any) -> dict[str, Any]:
             "cast": [],
             "rating": None,
             "vote_count": 0,
+            "media_type": media_type,
             "tmdb_checked": False,
         }
     return {
@@ -408,6 +436,7 @@ def cached_metadata(value: Any) -> dict[str, Any]:
         "cast": unique_values(value.get("cast") or [], CAST_LIMIT),
         "rating": normalized_rating(value.get("rating")),
         "vote_count": int(value.get("vote_count") or 0),
+        "media_type": value.get("media_type") or media_type,
         "tmdb_id": value.get("tmdb_id"),
         "tmdb_checked": bool(value.get("tmdb_checked")),
     }
@@ -434,6 +463,7 @@ def merge_metadata(
         "vote_count": int(
             primary.get("vote_count") or secondary.get("vote_count") or 0
         ),
+        "media_type": primary.get("media_type") or secondary.get("media_type") or "movie",
         "tmdb_id": primary.get("tmdb_id") or secondary.get("tmdb_id"),
         "tmdb_checked": bool(
             primary.get("tmdb_checked") or secondary.get("tmdb_checked")
@@ -507,6 +537,7 @@ def main() -> int:
     desc_updates = 0
     programmes_by_key: dict[str, list[ET.Element]] = {}
     titles_by_key: dict[str, str] = {}
+    media_types_by_key: dict[str, str] = {}
     metadata_by_key: dict[str, dict[str, Any]] = {}
 
     for programme in root.findall("programme"):
@@ -516,29 +547,36 @@ def main() -> int:
             skipped += 1
             continue
         if looks_like_series(title, categories, programme):
-            skipped += 1
-            continue
-        if not looks_like_movie(categories):
+            media_type = "tv"
+        elif looks_like_movie(categories):
+            media_type = "movie"
+        else:
             skipped += 1
             continue
 
-        key = normalize_title(title)
+        normalized_key = normalize_title(title)
+        key = f"{media_type}:{normalized_key}"
         existing_year = (programme.findtext("date") or "").strip()
         source_metadata = {
             "year": existing_year[:4] if existing_year else "",
-            "genres": source_genres(categories),
+            "genres": source_genres(categories, media_type),
             "cast": source_cast(programme),
             "rating": None,
             "vote_count": 0,
+            "media_type": media_type,
             "tmdb_checked": False,
         }
+        cached_value = cache.get(key)
+        if cached_value is None and media_type == "movie":
+            cached_value = cache.get(normalized_key)
         previous_metadata = metadata_by_key.get(
             key,
-            cached_metadata(cache.get(key)),
+            cached_metadata(cached_value, media_type),
         )
         metadata_by_key[key] = merge_metadata(source_metadata, previous_metadata)
         programmes_by_key.setdefault(key, []).append(programme)
         titles_by_key.setdefault(key, title)
+        media_types_by_key.setdefault(key, media_type)
 
     lookup_keys = [
         key
@@ -565,6 +603,7 @@ def main() -> int:
                 tmdb_api_key,
                 titles_by_key[key],
                 tmdb_language,
+                media_type=media_types_by_key[key],
                 expected_year=metadata["year"],
                 include_details=include_details,
             )
