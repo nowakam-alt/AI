@@ -74,6 +74,7 @@ NON_MOVIE_CATEGORY_HINTS = (
 )
 
 CAST_LIMIT = 5
+DIRECTOR_LIMIT = 2
 TMDB_WORKERS = 8
 
 
@@ -239,11 +240,17 @@ def tmdb_media_details(
             for item in payload.get("credits", {}).get("cast", [])[:CAST_LIMIT]
             if item.get("name")
         ],
+        "directors": unique_values([
+            item["name"].strip()
+            for item in payload.get("credits", {}).get("crew", [])
+            if item.get("name") and item.get("job") == "Director"
+        ], DIRECTOR_LIMIT),
         "rating": normalized_rating(payload.get("vote_average")) or fallback_rating,
         "vote_count": int(payload.get("vote_count") or fallback_vote_count or 0),
         "media_type": media_type,
         "tmdb_id": media_id,
         "tmdb_checked": True,
+        "director_checked": True,
     }
 
 
@@ -298,11 +305,13 @@ def tmdb_search_once(
             "year": release_date[:4] if release_date else "",
             "genres": [],
             "cast": [],
+            "directors": [],
             "rating": rating,
             "vote_count": vote_count,
             "media_type": media_type,
             "tmdb_id": selected["id"],
             "tmdb_checked": True,
+            "director_checked": False,
         }
 
     return tmdb_media_details(
@@ -409,36 +418,53 @@ def source_cast(programme: ET.Element) -> list[str]:
     return unique_values(actors, CAST_LIMIT)
 
 
+def source_directors(programme: ET.Element) -> list[str]:
+    credits = programme.find("credits")
+    if credits is None:
+        return []
+    return unique_values([
+        (director.text or "").strip()
+        for director in credits.findall("director")
+        if (director.text or "").strip()
+    ], DIRECTOR_LIMIT)
+
+
 def cached_metadata(value: Any, media_type: str) -> dict[str, Any]:
     if isinstance(value, str):
         return {
             "year": value,
             "genres": [],
             "cast": [],
+            "directors": [],
             "rating": None,
             "vote_count": 0,
             "media_type": media_type,
             "tmdb_checked": False,
+            "director_checked": False,
         }
     if not isinstance(value, dict):
         return {
             "year": "",
             "genres": [],
             "cast": [],
+            "directors": [],
             "rating": None,
             "vote_count": 0,
             "media_type": media_type,
             "tmdb_checked": False,
+            "director_checked": False,
         }
     return {
         "year": str(value.get("year") or ""),
         "genres": unique_values(value.get("genres") or []),
         "cast": unique_values(value.get("cast") or [], CAST_LIMIT),
+        "directors": unique_values(value.get("directors") or [], DIRECTOR_LIMIT),
         "rating": normalized_rating(value.get("rating")),
         "vote_count": int(value.get("vote_count") or 0),
         "media_type": value.get("media_type") or media_type,
         "tmdb_id": value.get("tmdb_id"),
         "tmdb_checked": bool(value.get("tmdb_checked")),
+        "director_checked": bool(value.get("director_checked")),
     }
 
 
@@ -455,6 +481,10 @@ def merge_metadata(
             list(primary.get("cast") or []) + list(secondary.get("cast") or []),
             CAST_LIMIT,
         ),
+        "directors": unique_values(
+            list(primary.get("directors") or []) + list(secondary.get("directors") or []),
+            DIRECTOR_LIMIT,
+        ),
         "rating": (
             primary.get("rating")
             if primary.get("rating") is not None
@@ -467,6 +497,9 @@ def merge_metadata(
         "tmdb_id": primary.get("tmdb_id") or secondary.get("tmdb_id"),
         "tmdb_checked": bool(
             primary.get("tmdb_checked") or secondary.get("tmdb_checked")
+        ),
+        "director_checked": bool(
+            primary.get("director_checked") or secondary.get("director_checked")
         ),
     }
 
@@ -483,14 +516,20 @@ def prepend_compact_metadata_to_descriptions(
     metadata: dict[str, Any],
 ) -> bool:
     desc_nodes = programme.findall("desc")
-    fields = [
+    data_fields = [
         str(metadata.get("year") or ""),
         f"{metadata['rating']:.1f}" if metadata.get("rating") is not None else "",
         ", ".join(metadata.get("genres") or []),
         ", ".join(metadata.get("cast") or []),
+        ", ".join(metadata.get("directors") or []),
     ]
-    if not any(fields):
+    if not any(data_fields):
         return False
+    fields = [
+        *data_fields[:3],
+        f"Obsada:{data_fields[3]}",
+        f"Reżyser:{data_fields[4]}",
+    ]
     compact_metadata = f"|{'|'.join(fields)}"
 
     if not desc_nodes:
@@ -546,14 +585,17 @@ def main() -> int:
         normalized_key = normalize_title(title)
         key = f"{media_type}:{normalized_key}"
         existing_year = (programme.findtext("date") or "").strip()
+        directors = source_directors(programme)
         source_metadata = {
             "year": existing_year[:4] if existing_year else "",
             "genres": source_genres(categories, media_type),
             "cast": source_cast(programme),
+            "directors": directors,
             "rating": None,
             "vote_count": 0,
             "media_type": media_type,
             "tmdb_checked": False,
+            "director_checked": bool(directors),
         }
         cached_value = cache.get(key)
         if cached_value is None and media_type == "movie":
@@ -571,12 +613,18 @@ def main() -> int:
         key
         for key, metadata in metadata_by_key.items()
         if (
-            not metadata["tmdb_checked"]
-            and (
-                not metadata["year"]
-                or metadata.get("rating") is None
-                or not metadata["genres"]
-                or len(metadata["cast"]) < CAST_LIMIT
+            (
+                not metadata["tmdb_checked"]
+                and (
+                    not metadata["year"]
+                    or metadata.get("rating") is None
+                    or not metadata["genres"]
+                    or len(metadata["cast"]) < CAST_LIMIT
+                )
+            )
+            or (
+                not metadata["director_checked"]
+                and not metadata["directors"]
             )
         )
     ]
@@ -586,16 +634,29 @@ def main() -> int:
         try:
             metadata = metadata_by_key[key]
             include_details = (
-                not metadata["genres"] or len(metadata["cast"]) < CAST_LIMIT
+                not metadata["genres"]
+                or len(metadata["cast"]) < CAST_LIMIT
+                or not metadata["directors"]
             )
-            result = tmdb_search(
-                tmdb_api_key,
-                titles_by_key[key],
-                tmdb_language,
-                media_type=media_types_by_key[key],
-                expected_year=metadata["year"],
-                include_details=include_details,
-            )
+            if include_details and metadata.get("tmdb_id"):
+                result = tmdb_media_details(
+                    tmdb_api_key,
+                    media_types_by_key[key],
+                    metadata["tmdb_id"],
+                    tmdb_language,
+                    metadata["year"],
+                    metadata.get("rating"),
+                    metadata.get("vote_count") or 0,
+                )
+            else:
+                result = tmdb_search(
+                    tmdb_api_key,
+                    titles_by_key[key],
+                    tmdb_language,
+                    media_type=media_types_by_key[key],
+                    expected_year=metadata["year"],
+                    include_details=include_details,
+                )
             return key, result, None
         except Exception as exc:
             return key, None, exc
@@ -616,6 +677,7 @@ def main() -> int:
                     tmdb_metadata,
                 )
             metadata_by_key[key]["tmdb_checked"] = True
+            metadata_by_key[key]["director_checked"] = True
 
     for key, programmes in programmes_by_key.items():
         metadata = metadata_by_key[key]
