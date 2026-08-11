@@ -2,11 +2,12 @@
 
 Ten katalog buduje gotowy plik XMLTV dla GitHub Pages.
 
-Opis filmu lub serialu jest zastępowany kompaktowymi metadanymi:
+Pierwsza linia opisu filmu lub serialu zawiera kompaktowe metadane:
 
 `2025|7.2|dramat|Aktor 1, Aktor 2, Aktor 3`
 
 Kolejność pól: rok, ocena TMDb, gatunek, obsada. Brakujące pole pozostaje puste.
+Oryginalny opis programu z XMLTV pozostaje bez zmian w kolejnej linii.
 
 Gatunek i obsada są pobierane najpierw z XMLTV, a brakujące dane z TMDb.
 Filmy korzystają z danych TMDb Movie, a seriale z TMDb TV.

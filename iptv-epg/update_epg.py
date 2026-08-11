@@ -478,7 +478,7 @@ def ensure_year(programme: ET.Element, year: str) -> None:
     date_node.text = year
 
 
-def replace_descriptions_with_metadata(
+def prepend_compact_metadata_to_descriptions(
     programme: ET.Element,
     metadata: dict[str, Any],
 ) -> bool:
@@ -499,7 +499,12 @@ def replace_descriptions_with_metadata(
         return True
 
     for desc_node in desc_nodes:
-        desc_node.text = compact_metadata
+        original_description = (desc_node.text or "").strip()
+        desc_node.text = (
+            f"{compact_metadata}\n{original_description}"
+            if original_description
+            else compact_metadata
+        )
     return True
 
 
@@ -619,7 +624,7 @@ def main() -> int:
         for programme in programmes:
             if metadata["year"]:
                 ensure_year(programme, metadata["year"])
-            if replace_descriptions_with_metadata(programme, metadata):
+            if prepend_compact_metadata_to_descriptions(programme, metadata):
                 desc_updates += 1
                 updated += 1
             else:
