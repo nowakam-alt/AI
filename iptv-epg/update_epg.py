@@ -491,7 +491,7 @@ def prepend_compact_metadata_to_descriptions(
     ]
     if not any(fields):
         return False
-    compact_metadata = "|".join(fields)
+    compact_metadata = f"|{'|'.join(fields)}"
 
     if not desc_nodes:
         desc_node = ET.SubElement(programme, "desc")
@@ -501,7 +501,7 @@ def prepend_compact_metadata_to_descriptions(
     for desc_node in desc_nodes:
         original_description = (desc_node.text or "").strip()
         desc_node.text = (
-            f"{compact_metadata}\n{original_description}"
+            f"{compact_metadata}\n\n{original_description}"
             if original_description
             else compact_metadata
         )
