@@ -2,9 +2,11 @@
 
 Ten katalog buduje gotowy plik XMLTV dla GitHub Pages.
 
-Na początku opisu filmu lub serialu dodawany jest blok:
+Opis filmu lub serialu jest zastępowany kompaktowymi metadanymi:
 
-`[Rok produkcji: 2025 | Ocena TMDb: 7.2/10 | Gatunek: dramat | Obsada: Aktor 1, Aktor 2, Aktor 3]`
+`2025|7.2|dramat|Aktor 1, Aktor 2, Aktor 3`
+
+Kolejność pól: rok, ocena TMDb, gatunek, obsada. Brakujące pole pozostaje puste.
 
 Gatunek i obsada są pobierane najpierw z XMLTV, a brakujące dane z TMDb.
 Filmy korzystają z danych TMDb Movie, a seriale z TMDb TV.

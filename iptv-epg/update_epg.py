@@ -478,44 +478,28 @@ def ensure_year(programme: ET.Element, year: str) -> None:
     date_node.text = year
 
 
-def prepend_metadata_to_descriptions(
+def replace_descriptions_with_metadata(
     programme: ET.Element,
     metadata: dict[str, Any],
 ) -> bool:
     desc_nodes = programme.findall("desc")
-    fields: list[str] = []
-
-    if metadata.get("year"):
-        fields.append(f"Rok produkcji: {metadata['year']}")
-    if metadata.get("rating") is not None:
-        fields.append(f"Ocena TMDb: {metadata['rating']:.1f}/10")
-    if metadata.get("genres"):
-        fields.append(f"Gatunek: {', '.join(metadata['genres'])}")
-    if metadata.get("cast"):
-        fields.append(f"Obsada: {', '.join(metadata['cast'])}")
-    if not fields:
+    fields = [
+        str(metadata.get("year") or ""),
+        f"{metadata['rating']:.1f}" if metadata.get("rating") is not None else "",
+        ", ".join(metadata.get("genres") or []),
+        ", ".join(metadata.get("cast") or []),
+    ]
+    if not any(fields):
         return False
-
-    prefix = f"[{' | '.join(fields)}]"
+    compact_metadata = "|".join(fields)
 
     if not desc_nodes:
         desc_node = ET.SubElement(programme, "desc")
-        desc_node.text = prefix
+        desc_node.text = compact_metadata
         return True
 
     for desc_node in desc_nodes:
-        current_text = (desc_node.text or "").strip()
-        current_text = re.sub(
-            r"^\[(?=[^\]]*(?:Rok produkcji|Ocena TMDb|Gatunek|Obsada):)[^\]]*\]\s*",
-            "",
-            current_text,
-        ).strip()
-        current_text = re.sub(
-            r"^Rok produkcji:\s*\d{4}\.?\s*",
-            "",
-            current_text,
-        ).strip()
-        desc_node.text = f"{prefix} {current_text}" if current_text else prefix
+        desc_node.text = compact_metadata
     return True
 
 
@@ -635,7 +619,7 @@ def main() -> int:
         for programme in programmes:
             if metadata["year"]:
                 ensure_year(programme, metadata["year"])
-            if prepend_metadata_to_descriptions(programme, metadata):
+            if replace_descriptions_with_metadata(programme, metadata):
                 desc_updates += 1
                 updated += 1
             else:
