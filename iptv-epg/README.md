@@ -4,12 +4,12 @@ Ten katalog buduje gotowy plik XMLTV dla GitHub Pages.
 
 Pierwsza linia opisu filmu lub serialu zawiera kompaktowe metadane:
 
-`|2025|7.2|dramat|Obsada:Aktor 1, Aktor 2, Aktor 3|Reżyser:Jan Kowalski`
+`|2025|7.2|dramat|USA|Obsada:Aktor 1, Aktor 2, Aktor 3|Reżyser:Jan Kowalski`
 
-Kolejność pól: rok, ocena TMDb, gatunek, obsada, reżyser. Brakujące pole pozostaje puste.
+Kolejność pól: rok, ocena TMDb, gatunek, kraj produkcji, obsada, reżyser. Brakujące pole pozostaje puste.
 Oryginalny opis programu z XMLTV pozostaje bez zmian po jednej pustej linii.
 
-Gatunek i obsada są pobierane najpierw z XMLTV, a brakujące dane z TMDb.
+Gatunek, kraj produkcji i obsada są pobierane najpierw z XMLTV, a brakujące dane z TMDb.
 Filmy korzystają z danych TMDb Movie, a seriale z TMDb TV.
 W opisie umieszczanych jest maksymalnie pięć głównych nazwisk.
 

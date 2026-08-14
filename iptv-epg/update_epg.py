@@ -75,7 +75,23 @@ NON_MOVIE_CATEGORY_HINTS = (
 
 CAST_LIMIT = 5
 DIRECTOR_LIMIT = 2
+COUNTRY_LIMIT = 3
 TMDB_WORKERS = 8
+
+COUNTRY_NAMES = {
+    "US": "USA",
+    "PL": "Polska",
+    "GB": "Wielka Brytania",
+    "DE": "Niemcy",
+    "FR": "Francja",
+    "IT": "Włochy",
+    "ES": "Hiszpania",
+    "CA": "Kanada",
+    "AU": "Australia",
+    "JP": "Japonia",
+    "KR": "Korea Południowa",
+    "CN": "Chiny",
+}
 
 
 def load_config() -> dict[str, Any]:
@@ -209,6 +225,11 @@ def normalized_rating(value: Any) -> float | None:
     return round(rating, 1)
 
 
+def country_name(value: str) -> str:
+    value = value.strip().strip("\"'“”„").strip()
+    return COUNTRY_NAMES.get(value.upper(), value)
+
+
 def tmdb_media_details(
     api_key: str,
     media_type: str,
@@ -228,6 +249,13 @@ def tmdb_media_details(
 
     date_field = "release_date" if media_type == "movie" else "first_air_date"
     release_date = payload.get(date_field) or fallback_date
+    if media_type == "movie":
+        countries = [
+            country_name(item.get("iso_3166_1") or item.get("name") or "")
+            for item in payload.get("production_countries", [])
+        ]
+    else:
+        countries = [country_name(item) for item in payload.get("origin_country", [])]
     return {
         "year": release_date[:4] if release_date else "",
         "genres": [
@@ -245,12 +273,14 @@ def tmdb_media_details(
             for item in payload.get("credits", {}).get("crew", [])
             if item.get("name") and item.get("job") == "Director"
         ], DIRECTOR_LIMIT),
+        "countries": unique_values(countries, COUNTRY_LIMIT),
         "rating": normalized_rating(payload.get("vote_average")) or fallback_rating,
         "vote_count": int(payload.get("vote_count") or fallback_vote_count or 0),
         "media_type": media_type,
         "tmdb_id": media_id,
         "tmdb_checked": True,
         "director_checked": True,
+        "country_checked": True,
     }
 
 
@@ -306,12 +336,14 @@ def tmdb_search_once(
             "genres": [],
             "cast": [],
             "directors": [],
+            "countries": [],
             "rating": rating,
             "vote_count": vote_count,
             "media_type": media_type,
             "tmdb_id": selected["id"],
             "tmdb_checked": True,
             "director_checked": False,
+            "country_checked": False,
         }
 
     return tmdb_media_details(
@@ -429,6 +461,14 @@ def source_directors(programme: ET.Element) -> list[str]:
     ], DIRECTOR_LIMIT)
 
 
+def source_countries(programme: ET.Element) -> list[str]:
+    return unique_values([
+        country_name(country.text or "")
+        for country in programme.findall("country")
+        if (country.text or "").strip()
+    ], COUNTRY_LIMIT)
+
+
 def cached_metadata(value: Any, media_type: str) -> dict[str, Any]:
     if isinstance(value, str):
         return {
@@ -436,11 +476,13 @@ def cached_metadata(value: Any, media_type: str) -> dict[str, Any]:
             "genres": [],
             "cast": [],
             "directors": [],
+            "countries": [],
             "rating": None,
             "vote_count": 0,
             "media_type": media_type,
             "tmdb_checked": False,
             "director_checked": False,
+            "country_checked": False,
         }
     if not isinstance(value, dict):
         return {
@@ -448,23 +490,27 @@ def cached_metadata(value: Any, media_type: str) -> dict[str, Any]:
             "genres": [],
             "cast": [],
             "directors": [],
+            "countries": [],
             "rating": None,
             "vote_count": 0,
             "media_type": media_type,
             "tmdb_checked": False,
             "director_checked": False,
+            "country_checked": False,
         }
     return {
         "year": str(value.get("year") or ""),
         "genres": unique_values(value.get("genres") or []),
         "cast": unique_values(value.get("cast") or [], CAST_LIMIT),
         "directors": unique_values(value.get("directors") or [], DIRECTOR_LIMIT),
+        "countries": unique_values(value.get("countries") or [], COUNTRY_LIMIT),
         "rating": normalized_rating(value.get("rating")),
         "vote_count": int(value.get("vote_count") or 0),
         "media_type": value.get("media_type") or media_type,
         "tmdb_id": value.get("tmdb_id"),
         "tmdb_checked": bool(value.get("tmdb_checked")),
         "director_checked": bool(value.get("director_checked")),
+        "country_checked": bool(value.get("country_checked")),
     }
 
 
@@ -485,6 +531,10 @@ def merge_metadata(
             list(primary.get("directors") or []) + list(secondary.get("directors") or []),
             DIRECTOR_LIMIT,
         ),
+        "countries": unique_values(
+            list(primary.get("countries") or []) + list(secondary.get("countries") or []),
+            COUNTRY_LIMIT,
+        ),
         "rating": (
             primary.get("rating")
             if primary.get("rating") is not None
@@ -500,6 +550,9 @@ def merge_metadata(
         ),
         "director_checked": bool(
             primary.get("director_checked") or secondary.get("director_checked")
+        ),
+        "country_checked": bool(
+            primary.get("country_checked") or secondary.get("country_checked")
         ),
     }
 
@@ -520,15 +573,16 @@ def prepend_compact_metadata_to_descriptions(
         str(metadata.get("year") or ""),
         f"{metadata['rating']:.1f}" if metadata.get("rating") is not None else "",
         ", ".join(metadata.get("genres") or []),
+        ", ".join(metadata.get("countries") or []),
         ", ".join(metadata.get("cast") or []),
         ", ".join(metadata.get("directors") or []),
     ]
     if not any(data_fields):
         return False
     fields = [
-        *data_fields[:3],
-        f"Obsada:{data_fields[3]}",
-        f"Reżyser:{data_fields[4]}",
+        *data_fields[:4],
+        f"Obsada:{data_fields[4]}",
+        f"Reżyser:{data_fields[5]}",
     ]
     compact_metadata = f"|{'|'.join(fields)}"
 
@@ -586,16 +640,19 @@ def main() -> int:
         key = f"{media_type}:{normalized_key}"
         existing_year = (programme.findtext("date") or "").strip()
         directors = source_directors(programme)
+        countries = source_countries(programme)
         source_metadata = {
             "year": existing_year[:4] if existing_year else "",
             "genres": source_genres(categories, media_type),
             "cast": source_cast(programme),
             "directors": directors,
+            "countries": countries,
             "rating": None,
             "vote_count": 0,
             "media_type": media_type,
             "tmdb_checked": False,
             "director_checked": bool(directors),
+            "country_checked": bool(countries),
         }
         cached_value = cache.get(key)
         if cached_value is None and media_type == "movie":
@@ -626,6 +683,10 @@ def main() -> int:
                 not metadata["director_checked"]
                 and not metadata["directors"]
             )
+            or (
+                not metadata["country_checked"]
+                and not metadata["countries"]
+            )
         )
     ]
     print(f"Unique TMDb lookups: {len(lookup_keys)}")
@@ -637,6 +698,7 @@ def main() -> int:
                 not metadata["genres"]
                 or len(metadata["cast"]) < CAST_LIMIT
                 or not metadata["directors"]
+                or not metadata["countries"]
             )
             if include_details and metadata.get("tmdb_id"):
                 result = tmdb_media_details(
@@ -678,6 +740,7 @@ def main() -> int:
                 )
             metadata_by_key[key]["tmdb_checked"] = True
             metadata_by_key[key]["director_checked"] = True
+            metadata_by_key[key]["country_checked"] = True
 
     for key, programmes in programmes_by_key.items():
         metadata = metadata_by_key[key]
